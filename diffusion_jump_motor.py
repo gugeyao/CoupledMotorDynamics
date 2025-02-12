@@ -323,19 +323,19 @@ class diffusion_jump_motor(object):
     def BIND_position(self):
         self.BIND1 = np.arange(0,self.tot_length,self.repeated_length,dtype =np.int32)
         self.BIND2 = np.arange(self.shifted_distance,self.shifted_distance+self.tot_length,self.repeated_length,dtype =np.int32)
-        self.BIND1_ = np.arange(self.repeated_length/2,self.repeated_length+1,1,dtype = np.int32) # broader core
-        self.BIND2_ = np.arange(self.repeated_length/2+self.shifted_distance,self.repeated_length+self.shifted_distance+1,1,dtype = np.int32) # broader core
-        BIND1_broad = []
-        for i in range(self.num_motifs):
-            BIND1_broad.extend(self.BIND1_ +i*self.repeated_length)
-        self.BIND1_broad = np.array(BIND1_broad)
-        self.BIND1_broad[self.BIND1_broad >= self.tot_length] -= self.tot_length
+        # self.BIND1_ = np.arange(self.repeated_length/2,self.repeated_length+1,1,dtype = np.int32) # broader core
+        # self.BIND2_ = np.arange(self.repeated_length/2+self.shifted_distance,self.repeated_length+self.shifted_distance+1,1,dtype = np.int32) # broader core
+        # BIND1_broad = []
+        # for i in range(self.num_motifs):
+        #     BIND1_broad.extend(self.BIND1_ +i*self.repeated_length)
+        # self.BIND1_broad = np.array(BIND1_broad)
+        # self.BIND1_broad[self.BIND1_broad >= self.tot_length] -= self.tot_length
         
-        BIND2_broad = []
-        for i in range(self.num_motifs):
-            BIND2_broad.extend(self.BIND2_ +i*self.repeated_length)
-        self.BIND2_broad = np.array(BIND2_broad)
-        self.BIND2_broad[self.BIND2_broad >= self.tot_length] -= self.tot_length
+        # BIND2_broad = []
+        # for i in range(self.num_motifs):
+        #     BIND2_broad.extend(self.BIND2_ +i*self.repeated_length)
+        # self.BIND2_broad = np.array(BIND2_broad)
+        # self.BIND2_broad[self.BIND2_broad >= self.tot_length] -= self.tot_length
         
     def CAT_position(self):
         CAT1 =np.arange(2,2+self.tot_length,self.repeated_length)
@@ -546,8 +546,8 @@ class diffusion_jump_motor(object):
         
     def compute_new_x1_x2_core(self):
         self.compute_integer_x1_x2()
-        x1_state = np.searchsorted(self.BIND1+3,self.x1_int) * self.repeated_length
-        x2_state = np.searchsorted(self.BIND2+3,self.x2_int) * self.repeated_length
+        x1_state = np.searchsorted(self.BIND1+self.repeated_length/2,self.x1_int) * self.repeated_length
+        x2_state = np.searchsorted(self.BIND2+self.repeated_length/2,self.x2_int) * self.repeated_length
         x1_state[x1_state == self.tot_length] = 0
         x2_state[x2_state == self.tot_length] = 0
         return x1_state, x2_state
@@ -567,8 +567,8 @@ class diffusion_jump_motor(object):
             self.recording_transitions(True,step,transition_folder_name,transition_file_handles,idx_traj,flag_change)
         elif option == 1:
             self.x1_state_new, self.x2_state_new  = self.compute_new_x1_x2_core()
-            x1_not_in_core = np.where(~np.isin(self.x1_int, self.BIND1_broad))[0]
-            x2_not_in_core = np.where(~np.isin(self.x2_int, self.BIND2_broad))[0]
+            x1_not_in_core = np.where(~np.isin(self.x1_int, self.BIND1))[0]
+            x2_not_in_core = np.where(~np.isin(self.x2_int, self.BIND2))[0]
             self.x1_state_new[x1_not_in_core] = self.x1_state_old[x1_not_in_core]
             self.x2_state_new[x2_not_in_core] = self.x2_state_old[x2_not_in_core]
             potential_type_1 = np.array(self.choices_1[:,:-1])
