@@ -450,7 +450,7 @@ class diffusion_jump_motor(object):
         return potential_bare_track_(x,self.well_width,self.barrier_height)
     
     def potential_LJ(self,dx_CAT,choices):
-        # force from barriers
+        #   from barriers
         U_all_barriers = potential_LJ_(self.epA, self.epR, dx_CAT, self.sigma)
         # deal with states that are currently blocked 
         blocked_unblocked = np.array(choices[:,:-1])

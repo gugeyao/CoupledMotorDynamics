@@ -5,7 +5,7 @@ from diffusion_jump_motor import DiffusionJumpMotor
 
 parallel_jobs = 1 # no parallel jobs
 shifted_distance = 6
-barrier_height = 1.872
+barrier_height = 0.702
 steps = np.int32(sys.argv[1])
 MC_steps = steps
 spring_strength=np.float64(sys.argv[2])
