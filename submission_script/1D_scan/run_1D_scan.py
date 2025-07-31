@@ -11,5 +11,6 @@ k_attach_right_FTC = np.float64(sys.argv[3]) # tune how fast the reaction can ha
 epR =  np.float64(sys.argv[4]) # repulsion between ring and red
 E_C_track = np.float64(sys.argv[5])
 gamma = 8
-motor = DiffusionJumpMotor(barrier_height=barrier_height, k_attach_right_FTC = k_attach_right_FTC, epR = epR, E_C_track = E_C_track,gamma = gamma)
+MC_steps = 1
+motor = DiffusionJumpMotor(MC_steps = MC_steps,barrier_height=barrier_height, k_attach_right_FTC = k_attach_right_FTC, epR = epR, E_C_track = E_C_track,gamma = gamma)
 motor.parallel_run_simulation(parallel_jobs,steps)

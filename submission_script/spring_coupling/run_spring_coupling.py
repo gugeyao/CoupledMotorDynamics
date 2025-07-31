@@ -5,13 +5,14 @@ from diffusion_jump_motor import DiffusionJumpMotor
 
 parallel_jobs = 1 # no parallel jobs
 shifted_distance = 6
-barrier_height = 1.872
+barrier_height = 1.575
 steps = np.int32(sys.argv[1])
 spring_strength=np.float64(sys.argv[2])
 k_attach_right_FTC = np.float64(sys.argv[3]) # tune how fast the reaction can happen
 epR =  np.float64(sys.argv[4]) # repulsion between ring and red
 E_C_track = np.float64(sys.argv[5])
-gamma = 8
-MC_steps = 1
-motor = DiffusionJumpMotor(MC_steps = MC_steps,k_attach_right_FTC = k_attach_right_FTC, epR = epR, E_C_track = E_C_track,coupling_strength=spring_strength,shifted_distance=shifted_distance,barrier_height=barrier_height,gamma = gamma)
+gamma = 6
+MC_steps = 100
+well_width = 6
+motor = DiffusionJumpMotor(MC_steps = MC_steps,k_attach_right_FTC = k_attach_right_FTC, epR = epR, E_C_track = E_C_track,coupling_strength=spring_strength,shifted_distance=shifted_distance,barrier_height=barrier_height,gamma = gamma, well_width= well_width)
 motor.parallel_run_simulation(parallel_jobs,steps)
