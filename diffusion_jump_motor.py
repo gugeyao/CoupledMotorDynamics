@@ -19,10 +19,14 @@ from joblib import Parallel, delayed
 warnings.filterwarnings('ignore')
 
 nopython = True
-#have validated the potential function
-# x is elementary x
+
+# =============================================================================
+# POTENTIAL FUNCTIONS
+# =============================================================================
+
 @nb.jit(nopython=nopython)
 def potential_bare_track_(x=np.array([]),length =0,barrier_height = 0):
+    """Bare track potential using sinusoidal function."""
     indices = np.where((x >= -length/2) & (x<= length/2))[0]
     U = np.zeros_like(x)+barrier_height/2
     U[indices] = barrier_height/2*np.sin(2*np.pi/length*(x[indices]-length/4))
@@ -30,17 +34,24 @@ def potential_bare_track_(x=np.array([]),length =0,barrier_height = 0):
 
 @nb.jit(nopython=nopython)
 def potential_LJ_(epA = 0, epR = 1e4, dr_CAT=2,sigma = 1):
+    """Lennard-Jones potential for repulsive interactions."""
     U = 4*(-epA*(sigma/dr_CAT)**6+epR*(sigma/dr_CAT)**12)
     return U
 
 @nb.jit(nopython=nopython)
 def potential_spring_(dr=np.array([]),k= 0,x0 = 0,cross_distance = 10):
+    """Spring potential for coupling between particles."""
     delta_x = np.sqrt((dr)**2+cross_distance**2)
     U = 0.5 * k *(delta_x - x0)**2
     return U
 
+# =============================================================================
+# FORCE FUNCTIONS
+# =============================================================================
+
 @nb.jit(nopython=nopython)
 def force_bare_track_(x_elementary=np.array([]),length =0,barrier_height = 0):
+    """Force from bare track potential using finite difference."""
     diff = np.float64(0.00000001)
     x_elementary = x_elementary + diff
     U_plus = potential_bare_track_(x_elementary,length,barrier_height)
@@ -53,6 +64,7 @@ def force_bare_track_(x_elementary=np.array([]),length =0,barrier_height = 0):
 
 @nb.jit(nopython=nopython)
 def force_LJ_(epA = 0, epR = 1e4, dr_CAT=2, sigma = 1):
+    """Force from Lennard-Jones potential using finite difference."""
     diff = np.float64(0.00000001)
     dr_CAT = dr_CAT +diff
     U_plus = potential_LJ_(epA, epR, dr_CAT,sigma)
@@ -65,6 +77,7 @@ def force_LJ_(epA = 0, epR = 1e4, dr_CAT=2, sigma = 1):
 
 @nb.jit(nopython=nopython)
 def force_spring_(dr=np.array([]),k = 0,x0 = 0,cross_distance = 10):
+    """Force from spring potential using finite difference."""
     diff = np.float64(0.00000001)
     dr = dr - diff
     U_plus = potential_spring_(dr,k,x0,cross_distance)
@@ -74,7 +87,12 @@ def force_spring_(dr=np.array([]),k = 0,x0 = 0,cross_distance = 10):
     dr = dr - diff
     return f1_spring
 
+# =============================================================================
+# ANALYSIS AND UTILITY FUNCTIONS
+# =============================================================================
+
 def hopping_rates(num_trial):
+    """Calculate hopping rates from simulation data."""
     a_folder = "simulation_data"
     right_cyc_rates = np.zeros(num_trial)
     left_cyc_rates = np.zeros(num_trial)
@@ -101,13 +119,28 @@ def hopping_rates(num_trial):
     left_cyc_rate_err = np.std(left_cyc_rates)/np.sqrt(num_trial)
     return right_cyc_rate_mean,right_cyc_rate_err,left_cyc_rate_mean,left_cyc_rate_err
 
+# =============================================================================
+# MAIN DIFFUSION JUMP MOTOR CLASS
+# =============================================================================
+
 class diffusion_jump_motor(object):    
-    # usage:
-    # 1. initialize the system
-    # 2. run the simulation
-    # 3. analyze the results
-    # author: Gugeyao
+    """
+    Diffusion-Jump Motor Simulation Class
+    
+    Usage:
+    1. initialize the system
+    2. run the simulation
+    3. analyze the results
+    
+    Author: Gugeyao
+    """
+    
+    # =============================================================================
+    # INITIALIZATION AND SETUP
+    # =============================================================================
+    
     def __init__(self):
+        """Initialize the diffusion jump motor with default parameters."""
         # bare-track potential parameters
         self.well_width = 6 # repeated length of the sin function
         self.barrier_height = 3.15 # the barrier height of the sinx well
@@ -143,6 +176,7 @@ class diffusion_jump_motor(object):
         self.MC_steps = 100
 
     def initialize_system(self):        
+        """Initialize the simulation system with all required variables."""
         # VRORV integrator parameters (matches C++ implementation)
         # initialization parameters
         self.tot_length = self.num_motifs * self.repeated_length
@@ -172,28 +206,17 @@ class diffusion_jump_motor(object):
         self.well_idx_1 = np.zeros((self.n))
         self.well_idx_2 = np.zeros((self.n))
         
-        # # probabilities of jumping to the next state
-        # self.P1 = np.zeros((self.n,self.num_motifs)) # the probablity of changing each blocking groups
-        # self.P2 = np.zeros((self.n,self.num_motifs)) # the probablity of changing each blocking groups
-        
         #  initial as unblocked state
         self.choices_1 = np.zeros((self.n,self.num_motifs)) # each choice can be blocked or unblocked, 0: unblocked, 1:  blocked
         self.choices_2 = np.zeros((self.n,self.num_motifs)) # each choice can be blocked or unblocked, 0: unblocked, 1:  blocked
-        # # random number of deciding the MC steps
-        # self.MC_rand1 = np.random.uniform(0,1,(self.cycle,self.n));
-        # self.MC_rand2 = np.random.uniform(0,1,(self.cycle,self.n));
         
-        # fit fermi functions for C particle
-        # self.compute_prefactor()
-        # self.compute_k_left()
-        # self.Fit_fermi_function_for_expfactor()
-        # self.compute_k_detach_C()
         self.CAT_position()
         self.BIND_position()
         self.force_calculation()
         self.print_out_system_info()
         
     def print_out_system_info(self):
+        """Print system information and parameters."""
         ##############print info###############
         print("========System info=========")
         print("beta = "+str(self.beta))
@@ -232,9 +255,7 @@ class diffusion_jump_motor(object):
         sys.stdout.flush()
     
     def explain_VRORV_integrator(self):
-        """
-        Explain the VRORV integrator and its advantages.
-        """
+        """Explain the VRORV integrator and its advantages."""
         print("\n=== VRORV Integrator Explanation ===")
         print("VRORV is a splitting method for Langevin dynamics:")
         print("V = Velocity update (quarter time step)")
@@ -250,30 +271,47 @@ class diffusion_jump_motor(object):
         print("✅ Time-reversible")
         print("=" * 40)
 
+    # =============================================================================
+    # UTILITY AND HELPER FUNCTIONS
+    # =============================================================================
+    
     def check_nan(self,x,string):
+        """Check for NaN values and exit if found."""
         if np.any(np.isnan(x)):
             print(string+" contains NaN values")
             sys.exit()
 
     def Fermi_function(self,x,center,spread,k_right=1, k_left=0):
+        """Fermi function for rate calculations."""
         return (k_right-k_left)*(1/(1+np.exp((-x+center)/spread)))+k_left 
 
-    # phenomenological rates:
+    # =============================================================================
+    # RATE CALCULATION FUNCTIONS
+    # =============================================================================
+    
     def k_attach_r(self,x):
+        """Calculate attachment rate as a function of position."""
         k = self.Fermi_function(x,self.center_attach,self.spread_attach,self.k_attach_far, 0)
         k[x < 2 + self.well_width/2] = 0 # prevent the particle's potential drastically change when it is on the binding site.
         return k
 
     def k_detach_r(self,x):
+        """Calculate detachment rate as a function of position."""
         U_LJ = potential_LJ_(self.epA, self.epR, x, self.sigma)
         k = self.k_detach_far* np.exp(self.beta*U_LJ*self.eta)
         return k
     
+    # =============================================================================
+    # POSITION AND BOUNDARY CALCULATIONS
+    # =============================================================================
+    
     def BIND_position(self):
+        """Calculate binding site positions for both tracks."""
         self.BIND1 = np.arange(0,self.tot_length,self.repeated_length,dtype =np.int32)
         self.BIND2 = np.arange(self.shifted_distance,self.shifted_distance+self.tot_length,self.repeated_length,dtype =np.int32)
         
     def CAT_position(self):
+        """Calculate catalytic site positions for both tracks."""
         CAT1 =np.arange(2,2+self.tot_length,self.repeated_length)
         self.CAT1_pos = np.tile(CAT1,(self.n,1))
         
@@ -281,25 +319,28 @@ class diffusion_jump_motor(object):
         self.boundary_single(CAT2)
         self.CAT2_pos = np.tile(CAT2,(self.n,1))
         
-    # if the particle is out of the bound move it back
     def boundary_single(self,x):
+        """Apply periodic boundary conditions to a single array."""
         x[x<0] += self.tot_length
         x[x >= self.tot_length] -= self.tot_length
         
     def boundary(self):
+        """Apply periodic boundary conditions to both particles."""
         self.boundary_single(self.x1)
         self.boundary_single(self.x2)
         
-    # compute the minimal distance between the two particles
     def pbc(self,dx):
+        """Apply periodic boundary conditions to distance calculations."""
         dx[dx >= self.tot_length/2] -= self.tot_length
         dx[dx <= -self.tot_length/2] += self.tot_length
-    # x2-x1
+        
     def compute_dr(self):
+        """Compute the minimal distance between the two particles."""
         self.dr = self.x2-self.x1
         self.pbc(self.dr)
-    # x - CAT
+        
     def compute_dCAT(self,x,CAT_pos):
+        """Compute distance between particle position and catalytic sites."""
         # The CAT position for track 1 is: 2, 2 + 2*l, ..., 2+ (num_motif-1)*l, <-- apply boundary on CAT position, (fixed during the simulation)
         # The CAT position for track 2 is: 2 + shifted_distance,  <-- apply boundary on CAT position
         tiled_x = np.tile(x.reshape(-1,1),(1,self.num_motifs))
@@ -308,36 +349,18 @@ class diffusion_jump_motor(object):
         return dx_CAT
     
     def compute_shifted_x_and_elementary_x(self):
+        """Compute shifted and elementary coordinates for both particles."""
         self.shifted_x1 = self.x1 +self.well_width/2
         self.boundary_single(self.shifted_x1)
         self.shifted_x2 = self.x2 +self.well_width/2-self.shifted_distance
         self.boundary_single(self.shifted_x2)
         self.elementary_shifted_x1 = self.shifted_x1%(self.repeated_length) -self.well_width/2
         self.elementary_shifted_x2 = self.shifted_x2%(self.repeated_length) -self.well_width/2
-    
 
+    # =============================================================================
+    # MONTE CARLO SIMULATION FUNCTIONS
+    # =============================================================================
     
-    # def Monte_Carlo_single_particle(self, MC_rand, x, CAT_pos, choices, P,particle_ID,replica_idx):
-    #     # The distance between the CAT and the current ring position. 
-    #     distance_x_CAT = np.abs(self.compute_dCAT(x,CAT_pos))
-    #     k_attach = self.k_attach_r(distance_x_CAT)
-    #     P = self.dt * k_attach *self.MC_steps
-    #     k_detach = self.k_detach_r(distance_x_CAT)
-    #     # deal with states that are currently blocked 
-    #     idx = np.argwhere(choices[:,:-1] == 1)
-    #     P[tuple(idx.T)] = self.dt * k_detach[tuple(idx.T)] *self.MC_steps
-    #     sum_P = np.sum(P,axis = 1)
-    #     if sum_P.max() > 0.1:
-    #         print(" Too big! acuumulated probability for particle is "+str(particle_ID)+": "+str(sum_P.max()))
-    #         max_particle = np.argmax(sum_P)
-    #         print("Particle's potential: "+str(choices[max_particle]))
-    #         print("Ring position: "+str(x[max_particle]))
-    #         print("Probability: "+str(P[max_particle]))
-    #         sys.exit()
-    #     P = np.cumsum(P,axis = 1)
-    #     flip_choice = np.diag(np.apply_along_axis(np.searchsorted, 1, P, MC_rand)).reshape(-1,1)#[[np.searchsorted(self.P1[i], MC_r1[i])] for i in range(len(MC_r1))]#
-    #     choices[replica_idx,flip_choice] *= -1
-    #     return choices, P
     def Monte_Carlo_single_particle_poisson(self, x, CAT_pos, choices):
         """
         Alternative Monte Carlo method using Poisson process simulation.
@@ -402,17 +425,20 @@ class diffusion_jump_motor(object):
         return choices
     
     def Monte_Carlo_step(self):
+        """Perform Monte Carlo step for both particles."""
         self.Monte_Carlo_single_particle_poisson(self.x1, self.CAT1_pos, self.choices_1)
         self.Monte_Carlo_single_particle_poisson(self.x2, self.CAT2_pos, self.choices_2)
-        # replica_idx = np.arange(self.n).reshape(-1,1)
-        # self.Monte_Carlo_single_particle(self.MC_rand1[cycle], self.x1, self.CAT1_pos, self.choices_1, self.P1,1,replica_idx)
-        # self.Monte_Carlo_single_particle(self.MC_rand2[cycle], self.x2, self.CAT2_pos, self.choices_2, self.P2,2,replica_idx)    
-        
+
+    # =============================================================================
+    # FORCE AND POTENTIAL CALCULATIONS
+    # =============================================================================
     
     def coupling_force(self):
+        """Calculate coupling force between particles."""
         return force_spring_(self.dr,self.k,self.x0,self.cross_distance)
 
     def LJ_force(self,dx_CAT,choices):
+        """Calculate Lennard-Jones force from barriers."""
         # force from barriers
         f_LJ_all_barriers = force_LJ_(self.epA, self.epR, dx_CAT, self.sigma)
         # deal with states that are currently blocked 
@@ -421,6 +447,7 @@ class diffusion_jump_motor(object):
         return f_LJ_sum
     
     def force_calculation(self):
+        """Calculate all forces acting on both particles."""
         # preparation
         self.compute_dr()
         self.compute_shifted_x_and_elementary_x()
@@ -442,23 +469,25 @@ class diffusion_jump_motor(object):
         self.check_nan(self.f1,"self.f1")
         self.check_nan(self.f2,"self.f2")
 
-    # for testing purpoose, single track
-    # this function is not used in the simulation
     def potential_bare_track(self,x):
+        """Calculate bare track potential (for testing purposes)."""
         return potential_bare_track_(x,self.well_width,self.barrier_height)
     
     def potential_LJ(self,dx_CAT,choices):
+        """Calculate Lennard-Jones potential from barriers."""
         #   from barriers
         U_all_barriers = potential_LJ_(self.epA, self.epR, dx_CAT, self.sigma)
         U_LJ_sum = np.sum(U_all_barriers*choices,axis = 1)
         return U_LJ_sum
     
     def potential_coupling(self,dr = None):
+        """Calculate coupling potential."""
         if dr is None:
             dr = self.dr
         return potential_spring_(dr,self.k,self.x0,self.cross_distance)
 
     def potential_calculation(self):
+        """Calculate total potential energy of the system."""
         self.compute_dr()
         self.compute_shifted_x_and_elementary_x()
         dx_CAT1 = self.compute_dCAT(self.x1,self.CAT1_pos)
@@ -470,6 +499,11 @@ class diffusion_jump_motor(object):
         U_coupling = self.potential_coupling()
         U_tot = U_bare_1+U_bare_2+U_LJ_1+U_LJ_2+U_coupling
         return U_tot
+
+    # =============================================================================
+    # DYNAMICS INTEGRATION
+    # =============================================================================
+    
     def underdamped(self, rand1, rand2):
         """
         VRORV integrator for Langevin dynamics (matches C++ implementation).
@@ -525,15 +559,20 @@ class diffusion_jump_motor(object):
         # Final V step: full time step velocity update
         self.p1 += 0.5 * self.dt * self.f1
         self.p2 += 0.5 * self.dt * self.f2
+
+    # =============================================================================
+    # STATE ANALYSIS AND TRACKING
+    # =============================================================================
     
-    # I only care about the behavior of ring 1, if the ring is on the core positions, what the current potential is how many cycles have been performed.
     def compute_integer_x1_x2(self):
+        """Compute integer positions for state analysis."""
         self.x1_int = np.round(self.x1)
         self.x1_int[self.x1_int == self.tot_length] = 0
         self.x2_int = np.round(self.x2)
         self.x2_int[self.x2_int == self.tot_length] = 0
         
     def compute_new_x1_x2_core(self):
+        """Compute core state positions for both particles."""
         self.compute_integer_x1_x2()
         x1_state = np.searchsorted(self.BIND1+self.repeated_length/2,self.x1_int) * self.repeated_length
         x2_state = np.searchsorted(self.BIND2+self.repeated_length/2,self.x2_int) * self.repeated_length
@@ -542,6 +581,7 @@ class diffusion_jump_motor(object):
         return x1_state, x2_state
     
     def coarse_graining_states(self,step,option,transition_folder_name,transition_file_handles,idx_traj):
+        """Coarse-grain states and track transitions."""
         if option == 0:
             # rings' position
             self.x1_state_old, self.x2_state_old  = self.compute_new_x1_x2_core()
@@ -583,6 +623,7 @@ class diffusion_jump_motor(object):
                 transition_file_handle.close()
             
     def recording_transitions(self,init,step,transition_folder_name,transition_file_handles,idx_traj,flag_change):
+        """Record state transitions to files."""
         if init == True:
             for i in range(self.n):
                 filename = str(transition_folder_name)+"/%04d.txt" %((idx_traj-1)*self.n+i+1)
@@ -605,8 +646,13 @@ class diffusion_jump_motor(object):
                 transition_file_handle.write(str(self.left_cycles_x1[k]))
                 transition_file_handle.write('\n')
                 #transition_file_handle.flush() 
-            
+
+    # =============================================================================
+    # SIMULATION EXECUTION
+    # =============================================================================
+    
     def propagation_underdamped_diffusion_jump_motor(self, steps, idx_traj):
+        """Main simulation propagation function."""
         print("parallel job ID = "+str(idx_traj))
         print("Launch jump-diffsuion simulations...")
         folder_name = "simulation_data"
@@ -677,6 +723,7 @@ class diffusion_jump_motor(object):
             np.savetxt("hopping_rates.txt",np.array([right_cyc_rate_mean,right_cyc_rate_err,left_cyc_rate_mean,left_cyc_rate_err]))
         
     def parallel_propagation_underdamped_diffusion_jump_motor(self,idx_traj,steps = 1000000):
+        """Initialize and run parallel simulation."""
         folder_name = "simulation_data"
         if not os.path.exists(folder_name) and idx_traj ==1:
             os.makedirs(folder_name)
@@ -686,9 +733,16 @@ class diffusion_jump_motor(object):
         self.initialize_system()
         self.propagation_underdamped_diffusion_jump_motor(steps,idx_traj)
 
+# =============================================================================
+# HIGH-LEVEL INTERFACE CLASS
+# =============================================================================
 
-############ packed everything together##############
 class DiffusionJumpMotor(diffusion_jump_motor):
+    """
+    High-level interface for the Diffusion-Jump Motor simulation.
+    Provides a cleaner API for parameter setting and simulation execution.
+    """
+    
     def __init__(self,
                  # equilibrium
                  MC_steps = 100,
@@ -741,9 +795,14 @@ class DiffusionJumpMotor(diffusion_jump_motor):
         super().parallel_propagation_underdamped_diffusion_jump_motor(trialID, steps)
         
     def parallel_run_simulation(self,parallel_jobs,steps):
+        """Run multiple parallel simulations."""
         idx_list = np.array([i for i in range(0, parallel_jobs, 1)])
         Parallel(n_jobs=int(parallel_jobs))(delayed(self.run_simulation)(trialID+1,steps) for trialID in idx_list)
         
+# =============================================================================
+# MAIN EXECUTION
+# =============================================================================
+
 if __name__ == "__main__":
     motor = diffusion_jump_motor()
     motor.k = 0
