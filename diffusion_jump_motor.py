@@ -248,7 +248,6 @@ class diffusion_jump_motor(object):
         self.n = 100 #number of replicas (traj.)
         self.dt = 0.005 # to prevent too large step
         self.gamma = 6
-        self.delta_gap = 0.5 # core-state definition
         self.cycle = 10000 # the length of generating random numbers
 
         # coupling parameters
@@ -264,6 +263,9 @@ class diffusion_jump_motor(object):
         self.k_detach_far = 1.5e-4
         self.eta = 1 # how much the detachment rate changes as a function of distance to the ring follows the LJ potential.
         self.MC_steps = 100
+        
+        # core detection parameter (tunable core diameter around each binding position)
+        self.core_size = 1.0
 
     def initialize_system(self):        
         """Initialize the simulation system with all required variables."""
@@ -282,7 +284,7 @@ class diffusion_jump_motor(object):
         
         self.compute_shifted_x_and_elementary_x()
         self.compute_dr()
-        # Boltzmann distribution: p ~ N(0, sqrt(m/β)) = N(0, sqrt(m*kB*T))
+        # Boltzmann distribution: p ~ N(0, sqrt(m/beta)) = N(0, sqrt(m*kB*T))
         self.p1 = np.random.normal(0,np.sqrt(self.m/self.beta),(self.n))
         self.p2 = np.random.normal(0,np.sqrt(self.m/self.beta),(self.n))
         self.f1 = np.zeros((self.n))
@@ -323,8 +325,8 @@ class diffusion_jump_motor(object):
 
         # Precompute constants for efficiency
         self.dt_m = self.dt / self.m # damping coefficient
-        self.exp_gamma_dt = np.exp(-self.gamma * self.dt_m)  # Matches C++: exp(-γ*dt/m)
-        self.sigma = np.sqrt(self.m * (1 - self.exp_gamma_dt**2) / self.beta)  # Matches C++: sqrt(m*(1-exp(-2*γ*dt/m))/β)
+        self.exp_gamma_dt = np.exp(-self.gamma * self.dt_m)  # Matches C++: exp(-gamma*dt/m)
+        self.sigma_thermal = np.sqrt(self.m * (1 - self.exp_gamma_dt**2) / self.beta)  # Matches C++: sqrt(m*(1-exp(-2*gamma*dt/m))/beta)
         
         # =============================================================================
         # MEMORY PREALLOCATION FOR PERFORMANCE OPTIMIZATION
@@ -349,7 +351,7 @@ class diffusion_jump_motor(object):
         self.state_changes = np.zeros(self.n, dtype=bool)
         
         # Pre-allocate trajectory array for output
-        traj_size = 1 + 2*self.n + 4*self.n + 2*self.n*self.num_motifs  # time + x1,x2 + cycles + choices
+        traj_size = 1 + 4*self.n + 4*self.n + 2*self.n*self.num_motifs  # time + x1,x2 + p1,p2 + cycles + choices
         self.traj_array = np.zeros(traj_size)
         
         # Pre-allocate core state arrays
@@ -404,6 +406,7 @@ class diffusion_jump_motor(object):
         print("spread_attach = "+str(self.spread_attach))
         print("k_detach_far = "+str(self.k_detach_far))
         print("eta = "+str(self.eta))
+        print("core size (diameter) = "+str(self.core_size))
         
         sys.stdout.flush()
     
@@ -417,11 +420,11 @@ class diffusion_jump_motor(object):
         print("R = Position update (half time step)")
         print("V = Velocity update (quarter time step)")
         print("\nAdvantages:")
-        print("✅ Matches C++ implementation exactly")
-        print("✅ Good numerical stability")
-        print("✅ Proper thermalization")
-        print("✅ Symplectic structure")
-        print("✅ Time-reversible")
+        print("- Matches C++ implementation exactly")
+        print("- Good numerical stability")
+        print("- Proper thermalization")
+        print("- Symplectic structure")
+        print("- Time-reversible")
         print("=" * 40)
 
     # =============================================================================
@@ -445,7 +448,7 @@ class diffusion_jump_motor(object):
     def k_attach_r(self,x):
         """Calculate attachment rate as a function of position."""
         k = self.Fermi_function(x,self.center_attach,self.spread_attach,self.k_attach_far, 0)
-        k[x < 2 + self.well_width/2] = 0 # prevent the particle's potential drastically change when it is on the binding site.
+        #k[x < 2 + self.well_width/2] = 0 # prevent the particle's potential drastically change when it is on the binding site.
         return k
 
     def k_detach_r(self,x):
@@ -464,6 +467,9 @@ class diffusion_jump_motor(object):
         self.BIND2 = np.arange(self.shifted_distance,self.shifted_distance+self.tot_length,self.repeated_length,dtype =np.int32)
         self.boundary_single(self.BIND1)
         self.boundary_single(self.BIND2)
+        # Tiled positions for efficient distance computation (shape: n x num_motifs)
+        self.BIND1_pos = np.tile(self.BIND1,(self.n,1))
+        self.BIND2_pos = np.tile(self.BIND2,(self.n,1))
         
     def CAT_position(self):
         """Calculate catalytic site positions for both tracks."""
@@ -564,8 +570,8 @@ class diffusion_jump_motor(object):
         total_time = self.dt * self.MC_steps
         
         # Use preallocated masks for eligible sites
-        np.equal(choices, 0, out=self.unblocked_mask)  # Sites that can be blocked
-        np.equal(choices, 1, out=self.blocked_mask)    # Sites that can be unblocked
+        self.unblocked_mask[:] = (choices == 0)  # Sites that can be blocked
+        self.blocked_mask[:] = (choices == 1)    # Sites that can be unblocked
         
         # Check for high rates (threshold: 0.01*100*0.005 = 0.005)
         threshold = 0.01
@@ -578,17 +584,17 @@ class diffusion_jump_motor(object):
             self.k_attach_eligible[~self.unblocked_mask] = 0
             
             # Check for high attachment rates
-            high_attach_rates = self.k_attach_eligible > threshold
+            high_attach_rates = self.k_attach_eligible*total_time > threshold
             if np.any(high_attach_rates):
-                print(f"WARNING: High attachment rates detected!")
-                print(f"Max k_attach_eligible: {np.max(self.k_attach_eligible):.6f}")
-                print(f"Threshold: {threshold:.6f}")
-                print(f"Number of high rates: {np.sum(high_attach_rates)}")
+                print("WARNING: High attachment rates detected!")
+                print("Max k_attach_eligible: {:.6f}".format(np.max(self.k_attach_eligible*total_time)))
+                print("Threshold: {:.6f}".format(threshold))
+                print("Number of high rates: {}".format(np.sum(high_attach_rates)))
             
             # Generate Poisson numbers for all sites (zeros for blocked sites)
-            np.random.poisson(self.k_attach_eligible * total_time, out=self.n_attach)
+            self.n_attach[:] = np.random.poisson(self.k_attach_eligible * total_time)
             # Apply the flips (unblocked -> blocked)
-            np.logical_and(self.n_attach > 0, self.unblocked_mask, out=self.flip_mask)
+            self.flip_mask[:] = np.logical_and(self.n_attach > 0, self.unblocked_mask)
             choices[self.flip_mask] = 1
         
         # For detachment events (blocked sites)
@@ -598,17 +604,17 @@ class diffusion_jump_motor(object):
             self.k_detach_eligible[~self.blocked_mask] = 0
             
             # Check for high detachment rates
-            high_detach_rates = self.k_detach_eligible > threshold
+            high_detach_rates = self.k_detach_eligible*total_time > threshold
             if np.any(high_detach_rates):
-                print(f"WARNING: High detachment rates detected!")
-                print(f"Max k_detach_eligible: {np.max(self.k_detach_eligible):.6f}")
-                print(f"Threshold: {threshold:.6f}")
-                print(f"Number of high rates: {np.sum(high_detach_rates)}")
+                print("WARNING: High detachment rates detected!")
+                print("Max k_detach_eligible: {:.6f}".format(np.max(self.k_detach_eligible*total_time)))
+                print("Threshold: {:.6f}".format(threshold))
+                print("Number of high rates: {}".format(np.sum(high_detach_rates)))
             
             # Generate Poisson numbers for all sites (zeros for unblocked sites)
-            np.random.poisson(self.k_detach_eligible * total_time, out=self.n_detach)
+            self.n_detach[:] = np.random.poisson(self.k_detach_eligible * total_time)
             # Apply the flips (blocked -> unblocked)
-            np.logical_and(self.n_detach > 0, self.blocked_mask, out=self.flip_mask)
+            self.flip_mask[:] = np.logical_and(self.n_detach > 0, self.blocked_mask)
             choices[self.flip_mask] = 0
         return choices
     
@@ -766,7 +772,7 @@ class diffusion_jump_motor(object):
         self.x1 += 0.5 * self.p1 * self.dt_m
         
         # O step: Ornstein-Uhlenbeck process (thermalization)
-        self.p1 = self.p1 * self.exp_gamma_dt + rand1 * self.sigma
+        self.p1 = self.p1 * self.exp_gamma_dt + rand1 * self.sigma_thermal
         
         # R step: full time step position update
         self.x1 += 0.5 * self.p1 * self.dt_m
@@ -779,7 +785,7 @@ class diffusion_jump_motor(object):
         self.x2 += 0.5 * self.p2 * self.dt_m
         
         # O step: Ornstein-Uhlenbeck process (thermalization)
-        self.p2 = self.p2 * self.exp_gamma_dt + rand2 * self.sigma
+        self.p2 = self.p2 * self.exp_gamma_dt + rand2 * self.sigma_thermal
         
         # R step: full time step position update
         self.x2 += 0.5 * self.p2 * self.dt_m
@@ -807,10 +813,10 @@ class diffusion_jump_motor(object):
     # =============================================================================
     
     def compute_integer_x1_x2(self):
-        """Compute integer positions for state analysis."""
-        self.x1_int = np.round(self.x1)
+        """Compute integer positions for state analysis using preallocated arrays."""
+        self.x1_int[:] = np.round(self.x1).astype(np.int32)
         self.x1_int[self.x1_int == self.tot_length] = 0
-        self.x2_int = np.round(self.x2)
+        self.x2_int[:] = np.round(self.x2).astype(np.int32)
         self.x2_int[self.x2_int == self.tot_length] = 0
         
     def compute_new_x1_x2_core(self):
@@ -848,11 +854,12 @@ class diffusion_jump_motor(object):
         # Compute initial core states
         self.x1_state_old, self.x2_state_old = self.compute_new_x1_x2_core()
         
-        # Create core state arrays (avoid unnecessary copying)
-        self.core_old = np.column_stack([self.x1_state_old, self.choices_1])
+        # Create core state arrays using preallocated arrays
+        self.core_old[:, 0] = self.x1_state_old
+        self.core_old[:, 1:] = self.choices_1
         
-        # Initialize waiting time array
-        self.wt_array = np.full(self.n, self.dt)
+        # Initialize waiting time array (already preallocated)
+        self.wt_array.fill(self.dt)
         
         # Initialize file handles
         self.recording_transitions(True, step, transition_folder_name, transition_file_handles, idx_traj, [])
@@ -866,33 +873,41 @@ class diffusion_jump_motor(object):
         self.x1_in_core.fill(False)  # Reset to False
         self.x2_in_core.fill(False)  # Reset to False
         
-        # Vectorized core position checking
-        for bind_pos in self.BIND1:
-            self.x1_in_core |= (self.x1_int == bind_pos)
-        for bind_pos in self.BIND2:
-            self.x2_in_core |= (self.x2_int == bind_pos)
+        # Determine in-core using PBC distances to nearest BIND positions within self.core_size
+        # Use pre-allocated tiled arrays to avoid allocations
+        self.tiled_x1[:] = self.x1.reshape(-1,1)
+        dx_bind1 = self.tiled_x1 - self.BIND1_pos
+        self.pbc(dx_bind1)
+        self.x1_in_core[:] = np.any(np.abs(dx_bind1) <= 0.5*self.core_size, axis=1)
+        
+        self.tiled_x2[:] = self.x2.reshape(-1,1)
+        dx_bind2 = self.tiled_x2 - self.BIND2_pos
+        self.pbc(dx_bind2)
+        self.x2_in_core[:] = np.any(np.abs(dx_bind2) <= 0.5*self.core_size, axis=1)
         
         # Update states only where needed (avoid unnecessary array creation)
-        np.where(self.x1_in_core, x1_state_new, self.x1_state_old, out=self.x1_state_new)
-        np.where(self.x2_in_core, x2_state_new, self.x2_state_old, out=self.x2_state_new)
+        self.x1_state_new[:] = np.where(self.x1_in_core, x1_state_new, self.x1_state_old)
+        self.x2_state_new[:] = np.where(self.x2_in_core, x2_state_new, self.x2_state_old)
         
         # Create new core state array using preallocated array
         self.core_new[:, 0] = self.x1_state_new
         self.core_new[:, 1:] = self.choices_1
         
         # Detect state changes efficiently using preallocated array
-        np.any(self.core_new != self.core_old, axis=1, out=self.state_changes)
+        self.state_changes[:] = np.any(self.core_new != self.core_old, axis=1)
         
         # Only process if there are changes
         if np.any(self.state_changes):
             flag_change = np.where(self.state_changes)[0]
             
-            # Update waiting times efficiently
+            # Update waiting times efficiently (include this step)
             self.wt_array += self.dt
-            self.wt_array[flag_change] = self.dt
             
-            # Record transitions only for changed particles
+            # Record transitions only for changed particles using pre-reset waiting times
             self.recording_transitions(False, step, transition_folder_name, transition_file_handles, idx_traj, flag_change)
+            
+            # Reset waiting times for changed particles after recording
+            self.wt_array[flag_change] = self.dt
             
             # Detect and count cycles efficiently
             self._detect_cycles()
@@ -1006,8 +1021,8 @@ class diffusion_jump_motor(object):
             c1 = i%self.cycle
             if c1 == 0:
                 #random numbers (with chunks), otherwise the cluster cannot run it.
-                np.random.normal(0, 1, out=self.rand1)  # Reuse preallocated array
-                np.random.normal(0, 1, out=self.rand2)  # Reuse preallocated array
+                self.rand1[:] = np.random.normal(0, 1, (self.cycle, self.n))  # Reuse preallocated array
+                self.rand2[:] = np.random.normal(0, 1, (self.cycle, self.n))  # Reuse preallocated array
             self.underdamped(self.rand1[c1],self.rand2[c1])
             self.check_nan(self.x1,"self.x1")
             self.check_nan(self.x2,"self.x2")
@@ -1030,8 +1045,20 @@ class diffusion_jump_motor(object):
             if (i)%Nlag == 0 and i >= Nlag:
                 print("step: "+str(i))
                 counts += 1
-                traj = np.array(np.concatenate((np.array([i * self.dt]),self.x1, self.x2,self.right_cycles_x1,self.left_cycles_x1,\
-                                                self.right_cycles_x2,self.left_cycles_x2,np.transpose(self.choices_1).flatten(),np.transpose(self.choices_2).flatten())))
+                # Use preallocated trajectory array for better performance
+                current_time = i * self.dt
+                self.traj_array[0] = current_time
+                self.traj_array[1:self.n+1] = self.x1
+                self.traj_array[self.n+1:2*self.n+1] = self.x2
+                self.traj_array[2*self.n+1:3*self.n+1] = self.p1
+                self.traj_array[3*self.n+1:4*self.n+1] = self.p2
+                self.traj_array[4*self.n+1:5*self.n+1] = self.right_cycles_x1
+                self.traj_array[5*self.n+1:6*self.n+1] = self.left_cycles_x1
+                self.traj_array[6*self.n+1:7*self.n+1] = self.right_cycles_x2
+                self.traj_array[7*self.n+1:8*self.n+1] = self.left_cycles_x2
+                self.traj_array[8*self.n+1:8*self.n+1+self.n*self.num_motifs] = np.transpose(self.choices_1).flatten()
+                self.traj_array[8*self.n+1+self.n*self.num_motifs:] = np.transpose(self.choices_2).flatten()
+                traj = self.traj_array
                 for k,file_handle in enumerate(file_handles):
                     single_traj = traj[[0,k+1,self.n+k+1,self.n*2+k+1,self.n*3+k+1,self.n*4+k+1,self.n*5+k+1]]
                     array_string = ' '.join(map(str, single_traj))
@@ -1079,11 +1106,13 @@ class DiffusionJumpMotor(diffusion_jump_motor):
                  # potential parameters
                  barrier_height=3.15, well_width=6, repeated_length=12, num_motifs=4,
                  # interaction parameters
-                 epR=1e4, 
+                 epR=1e5, 
                  # rate constant parameters
-                 k_attach_far=2e-4, center_attach=4.6, spread_attach=0.001, k_detach_far=1.5e-4, eta=1,
+                 k_attach_far=2e-4, center_attach=4.6, f=0.001, k_detach_far=1.5e-4, eta=0,
                  # coupling parameters
-                 shifted_distance=0, coupling_strength=0, coupling_center=0,gamma = 6):
+                 shifted_distance=0, coupling_strength=0, coupling_center=0,gamma = 6,
+                 # core detection parameter
+                 core_size=1.0):
         """
         Initialize the diffusion jump motor with all required parameters.
         """
@@ -1116,6 +1145,9 @@ class DiffusionJumpMotor(diffusion_jump_motor):
         self.dt = 0.005
         self.beta = 2
         self.cross_distance = 10
+        
+        # core detection parameter
+        self.core_size = core_size
 
     def run_simulation(self, trialID, steps):
         """
