@@ -88,3 +88,6 @@ Cluster notes:
 - For single long runs, prefer running `run_spring_coupling.py` directly with your desired arguments.
 
 
+
+### Copyright
+Copyright (c) 2025 Geyao Gu. All rights reserved.
