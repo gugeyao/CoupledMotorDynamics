@@ -1,4 +1,4 @@
-## Diffusion–Jump Motor
+## Jump-Diffusion Model for Coupled Molecular Motor
 
 Simulation for a diffusion–jump molecular motor on two coupled periodic tracks. The main implementation is in `diffusion_jump_motor.py` with a high-level API and Slurm-friendly submission scripts.
 
